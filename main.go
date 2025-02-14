@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -27,6 +28,7 @@ var (
 	width    int
 	bgColor  color.Color
 	fgColor  color.Color
+	cmd      string
 
 	//go:embed CaskaydiaMonoNerdFontMono-Regular.ttf
 	defaultFont []byte
@@ -40,6 +42,7 @@ func init() {
 	flag.StringVar(&resolution, "resolution", "1920x1080", "output image resolution WIDTHxHEIGHT")
 	flag.StringVar(&fgHex, "fg", "e1e1e1ff", "hex font color")
 	flag.StringVar(&bgHex, "bg", "1e1e1eff", "hex background color")
+	flag.StringVar(&cmd, "cmd", "", "command to render on image (default: read stdin)")
 	flag.Parse()
 
 	sw, sh, found := strings.Cut(resolution, "x")
@@ -55,6 +58,7 @@ func init() {
 	fmt.Printf("resolution:  %dx%d\n", width, height)
 	fmt.Printf("fg color:    %s\n", fgHex)
 	fmt.Printf("bg color:    %s\n", bgHex)
+	fmt.Printf("cmd:         %s\n", cmd)
 }
 
 func parseHexColor(hexRepr string) color.Color {
@@ -92,25 +96,6 @@ func readFont() []byte {
 		fatalf("failed to read font file %s\n", fontFile)
 	}
 	return data
-}
-
-func getCowsayOutput() string {
-	fortune := exec.Command("fortune")
-	cowsay := exec.Command("cowsay")
-
-	buf := new(bytes.Buffer)
-	pipe, err := fortune.StdoutPipe()
-	if err != nil {
-		fatalf("failed to get pipe from fortune: %v\n", err)
-	}
-
-	cowsay.Stdin = pipe // pass 'fortune' stdout to 'cowsay' stdin
-	cowsay.Stdout = buf // get output of cowsay into buffer
-	cowsay.Start()      // start cowsay, it wait for input
-	fortune.Run()       // run fortune, content of stdout will be redirected as stdin for cowsay
-	cowsay.Wait()       // wait until cowsay finished his process
-
-	return buf.String()
 }
 
 func renderText(im draw.Image, text string) {
@@ -165,9 +150,54 @@ func saveImage(im image.Image) {
 	defer f.Close()
 }
 
+func pipeCmds(cmds []*exec.Cmd) {
+	for i := 0; i < len(cmds)-1; i++ {
+		cmd := cmds[i]
+		nextCmd := cmds[i+1]
+
+		pipe, err := cmd.StdoutPipe()
+		if err != nil {
+			fatalf("failed to get pipe: %v\n", err)
+		}
+		nextCmd.Stdin = pipe
+	}
+}
+
+func getOutput(command string) string {
+	pipeSeparated := strings.Split(command, "|")
+	cmds := make([]*exec.Cmd, 0, len(pipeSeparated))
+	for _, rawCmd := range pipeSeparated {
+		splitted := strings.Split(strings.TrimSpace(rawCmd), " ")
+		cmd := exec.Command(strings.TrimSpace(splitted[0]), splitted[1:]...)
+		cmds = append(cmds, cmd)
+	}
+
+	pipeCmds(cmds)
+	w := new(bytes.Buffer)
+	cmds[len(cmds)-1].Stdout = w
+
+	for _, cmd := range cmds {
+		err := cmd.Start()
+		if err != nil {
+			fatalf("failed to start %s: %v\n", cmd.Path, err)
+		}
+	}
+
+	cmds[len(cmds)-1].Wait()
+
+	return w.String()
+}
+
 func main() {
+	var text string
+	if cmd == "" {
+		b, _ := io.ReadAll(os.Stdin)
+		text = string(b)
+	} else {
+		text = getOutput(cmd)
+	}
 	im := newImage()
 	fill(im)
-	renderText(im, getCowsayOutput())
+	renderText(im, text)
 	saveImage(im)
 }
