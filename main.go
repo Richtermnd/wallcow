@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -10,6 +11,7 @@ import (
 	"image/png"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/golang/freetype/truetype"
@@ -19,17 +21,77 @@ import (
 
 // TODO: make it args
 var (
-	fontFile = "CaskaydiaMonoNerdFontMono-Regular.ttf"
-	output   = "output.png"
-	height   = 1080
-	width    = 1920
-	bgColor  = color.RGBA{30, 30, 30, 255}
-	fgColor  = color.RGBA{230, 230, 230, 255}
+	fontFile string
+	output   string
+	height   int
+	width    int
+	bgColor  color.Color
+	fgColor  color.Color
+
+	//go:embed CaskaydiaMonoNerdFontMono-Regular.ttf
+	defaultFont []byte
 )
+
+func init() {
+	var resolution string
+	var fgHex, bgHex string
+	flag.StringVar(&output, "o", "wallcow_output.png", "output file")
+	flag.StringVar(&fontFile, "font", "default", "font file (now supports only ttf)")
+	flag.StringVar(&resolution, "resolution", "1920x1080", "output image resolution WIDTHxHEIGHT")
+	flag.StringVar(&fgHex, "fg", "e1e1e1ff", "hex font color")
+	flag.StringVar(&bgHex, "bg", "1e1e1eff", "hex background color")
+	flag.Parse()
+
+	sw, sh, found := strings.Cut(resolution, "x")
+	if !found {
+		fatalf("invalid resolution %s\n", resolution)
+	}
+	width, _ = strconv.Atoi(sw)
+	height, _ = strconv.Atoi(sh)
+	fgColor = parseHexColor(fgHex)
+	bgColor = parseHexColor(bgHex)
+	fmt.Printf("output file: %s\n", output)
+	fmt.Printf("font:        %s\n", fontFile)
+	fmt.Printf("resolution:  %dx%d\n", width, height)
+	fmt.Printf("fg color:    %s\n", fgHex)
+	fmt.Printf("bg color:    %s\n", bgHex)
+}
+
+func parseHexColor(hexRepr string) color.Color {
+	var c color.RGBA
+	t, err := strconv.ParseUint(hexRepr, 16, 64)
+	if err != nil {
+		fatalf("failed to parse color %s: %v\n", hexRepr, err)
+	}
+	c.R = uint8((t >> 24) & 0xff)
+	c.G = uint8((t >> 16) & 0xff)
+	c.B = uint8((t >> 8) & 0xff)
+	c.A = uint8((t >> 0) & 0xff)
+	return c
+}
 
 func fatalf(s string, args ...any) {
 	fmt.Fprintf(os.Stderr, s, args...)
 	os.Exit(1)
+}
+
+func fill(im draw.Image) {
+	draw.Draw(im, im.Bounds(), &image.Uniform{bgColor}, image.Point{}, draw.Src)
+}
+
+func newImage() draw.Image {
+	return image.NewRGBA(image.Rect(0, 0, width, height))
+}
+
+func readFont() []byte {
+	if fontFile == "default" {
+		return defaultFont
+	}
+	data, err := os.ReadFile(fontFile)
+	if err != nil {
+		fatalf("failed to read font file %s\n", fontFile)
+	}
+	return data
 }
 
 func getCowsayOutput() string {
@@ -56,15 +118,17 @@ func renderText(im draw.Image, text string) {
 	textHeight := len(splittedText)
 	textWidth := len(splittedText[0])
 
-	// vertical gap - 100px
-	// TODO: make it customizable
 	var fontSize int
+	// vertical gap - 100px
+	// Looks weird
+	// TODO: make it customizable
 	if (height-200)/textHeight*10/12 < (width-300)/textWidth {
 		fontSize = (height - 200) / textHeight * 10 / 12
 	} else {
 		fontSize = (width - 300) / textWidth
 	}
-	fmt.Printf("fontSize: %v\n", fontSize)
+
+	fmt.Printf("fontSize:    %d\n", fontSize)
 
 	f, err := truetype.Parse(readFont())
 	if err != nil {
@@ -99,22 +163,6 @@ func saveImage(im image.Image) {
 		fatalf("failed to save image as png: %v\n", err)
 	}
 	defer f.Close()
-}
-
-func readFont() []byte {
-	data, err := os.ReadFile(fontFile)
-	if err != nil {
-		fatalf("failed to read font: %v\n", err)
-	}
-	return data
-}
-
-func newImage() draw.Image {
-	return image.NewRGBA(image.Rect(0, 0, width, height))
-}
-
-func fill(im draw.Image) {
-	draw.Draw(im, im.Bounds(), &image.Uniform{bgColor}, image.Point{}, draw.Src)
 }
 
 func main() {
